@@ -27,6 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text.strip()
     data = worksheet.get_all_records()
+
     result = next((row for row in data if str(row.get("Номер заказа")).strip() == user_input), None)
 
     if result:
