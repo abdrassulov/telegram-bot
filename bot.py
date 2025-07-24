@@ -9,39 +9,46 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Подключение к Google Таблице через переменную окружения
+# Авторизация Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-json_data = os.environ.get("GSPREAD_JSON")  # именно GSPREAD_JSON, не имя файла!
+json_data = os.environ.get("GSPREAD_JSON")
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(json_data), scope)
 client = gspread.authorize(creds)
 
-# Открываем таблицу по ID
+# Подключение к таблице
 spreadsheet = client.open_by_key("1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8")
-worksheet = spreadsheet.worksheet("СЦ")
+worksheet = spreadsheet.worksheet("СЦ")  # Название листа
 
-# Команда /start
+# Обработка команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Привет! Отправь номер заказа, чтобы получить информацию.")
 
-# Обработка сообщения
+# Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text.strip()
-    data = worksheet.get_all_records()
+    all_data = worksheet.get_all_values()
 
-    result = next((row for row in data if str(row.get("Номер заказа")).strip() == user_input), None)
+    headers = all_data[0]  # первая строка — заголовки
+    rows = all_data[1:]    # остальные строки — данные
 
-    if result:
-        message = (
-            f"Номер заказа: {result.get('Номер заказа')}\n"
-            f"Клиент: {result.get('Клиент')}\n"
-            f"Статус: {result.get('Статус')}"
-        )
+    result_row = None
+    for row in rows:
+        if row[0].strip() == user_input:  # ищем по первой колонке
+            result_row = row
+            break
+
+    if result_row:
+        message = "Вот информация о заказе:\n\n"
+        for i in range(len(result_row)):
+            header = headers[i] if i < len(headers) else f"Поле {i+1}"
+            value = result_row[i]
+            message += f"{header}: {value}\n"
     else:
         message = "Ничего не найдено по этому номеру заказа."
 
     await update.message.reply_text(message)
 
-# Запуск
+# Запуск бота
 if __name__ == "__main__":
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
     if not BOT_TOKEN:
