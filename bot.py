@@ -2,86 +2,94 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 from telegram import Update
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
+    ContextTypes,
     CommandHandler,
     MessageHandler,
-    ContextTypes,
-    filters,
+    AIORateLimiter,
+    filters
 )
-from dotenv import load_dotenv
 import gspread
+from dotenv import load_dotenv
 
-# Загрузка .env
+# Загрузка .env переменных
 load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GSPREAD_JSON = os.getenv("GSPREAD_JSON")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # например: https://your-app.onrender.com
 
-# Настройка логгирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Переменные окружения
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GSPREAD_JSON = os.getenv("GSPREAD_JSON")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-
-# Подключение к Google Sheets
+# Настройка доступа к Google Таблице
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
-worksheet = gc.open_by_url(SPREADSHEET_URL).get_worksheet(0)
+spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0")
+worksheet = spreadsheet.get_worksheet(0)  # первая вкладка
 
-# Инициализация Telegram-приложения
-app_tg = Application.builder().token(BOT_TOKEN).build()
+# Бот
+app_tg: Application = ApplicationBuilder() \
+    .token(BOT_TOKEN) \
+    .rate_limiter(AIORateLimiter()) \
+    .build()
 
-# Функция поиска строки
-def find_order(order_number: str) -> str:
-    headers = worksheet.row_values(1)
-    all_data = worksheet.get_all_values()[1:]
-    for row in all_data:
-        if row and row[0].strip() == order_number.strip():
-            return "\n".join([f"{headers[i]} — {row[i]}" for i in range(len(headers)) if i < len(row)])
-    return "Заказ не найден."
 
-# Обработчик /start
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь номер заказа, и я покажу информацию.")
+    await update.message.reply_text("Привет! Отправь номер заказа, и я найду информацию по нему.")
 
-# Обработчик номера заказа
+
+# Обработка номера заказа
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    response = find_order(text)
-    await update.message.reply_text(response)
+    order_number = update.message.text.strip()
+    data = worksheet.get_all_values()
+    headers = data[0]
+    rows = data[1:]
+    for row in rows:
+        if row[0].strip() == order_number:  # номер заказа в первом столбце
+            response = "\n".join(f"{headers[i]} — {cell}" for i, cell in enumerate(row))
+            await update.message.reply_text(response)
+            return
+    await update.message.reply_text("❌ Заказ не найден.")
 
-# Регистрация обработчиков
+
+# Обработчики Telegram
 app_tg.add_handler(CommandHandler("start", start))
 app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# FastAPI-приложение
-app = FastAPI()
 
+# FastAPI lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 Запуск Telegram-бота...")
+    await app_tg.initialize()
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    await app_tg.bot.set_webhook(webhook_url)
+    logger.info(f"✅ Webhook установлен: {webhook_url}")
+    yield
+    logger.info("🛑 Остановка Telegram-бота...")
+    await app_tg.shutdown()
+
+
+# FastAPI приложение
+app = FastAPI(lifespan=lifespan)
+
+
+# Роут для webhook
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.de_json(data, app_tg.bot)
     await app_tg.process_update(update)
-    return JSONResponse({"status": "ok"})
+    return {"ok": True}
 
+
+# Проверка работоспособности
 @app.get("/")
-def home():
-    return {"status": "ok"}
-
-# Lifespan (запуск бота + установка webhook)
-@app.on_event("startup")
-async def on_startup():
-    logger.info("⏳ Установка Webhook...")
-    await app_tg.initialize()
-    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-    await app_tg.bot.set_webhook(webhook_url)
-    logger.info(f"✅ Webhook установлен: {webhook_url}")
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    logger.info("🛑 Отключение Webhook...")
-    await app_tg.shutdown()
+def root():
+    return {"status": "Бот работает 🎉"}
