@@ -1,73 +1,73 @@
 import os
 import logging
-import asyncio
-import json
-
 from fastapi import FastAPI
-from contextlib import asynccontextmanager
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
-from dotenv import load_dotenv
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import json
+from dotenv import load_dotenv
 
-# Загрузка .env
+# Загрузка переменных окружения
 load_dotenv()
+
+# Инициализация логгера
+logging.basicConfig(level=logging.INFO)
+
+# Создание FastAPI-приложения
+app = FastAPI()
+
+# Создание Telegram-бота
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSPREAD_JSON = os.getenv("GSPREAD_JSON")
 
-# Логирование
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Авторизация в Google Sheets
+service_account_info = json.loads(GSPREAD_JSON)
+gc = gspread.service_account_from_dict(service_account_info)
 
-# Подключение к Google Таблице
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GSPREAD_JSON), scope)
-gc = gspread.authorize(credentials)
-sheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8")
-worksheet = sheet.sheet1
+# Укажи ПРАВИЛЬНЫЙ URL твоей таблицы
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
+spreadsheet = gc.open_by_url(SPREADSHEET_URL)
+worksheet = spreadsheet.get_worksheet(0)
 
-# Создаём Telegram Application
-app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
+# Функция поиска по номеру заказа
+def find_row_by_order(order_number):
+    all_data = worksheet.get_all_records()
+    for row in all_data:
+        if str(row.get("Номер заказа")).strip() == str(order_number).strip():
+            return "\n".join([f"{k}: {v}" for k, v in row.items()])
+    return "Заказ не найден."
 
-
-# === HANDLERS ===
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь номер заказа.")
-
-
+# Обработчик сообщений Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    order_number = update.message.text.strip()
-    try:
-        records = worksheet.get_all_records()
-        for row in records:
-            if str(row["Номер заказа"]) == order_number:
-                msg = "\n".join([f"{k}: {v}" for k, v in row.items()])
-                await update.message.reply_text(f"🧾 Заказ найден:\n{msg}")
-                return
-        await update.message.reply_text("❌ Заказ не найден.")
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await update.message.reply_text("Произошла ошибка при обработке.")
+    order_number = update.message.text
+    response = find_row_by_order(order_number)
+    await update.message.reply_text(response)
 
-
-# === Регистрируем обработчики ===
-app_telegram.add_handler(CommandHandler("start", start))
+# Инициализация Telegram-приложения
+app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
 app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+# Запуск Telegram-бота при старте FastAPI
+@app.on_event("startup")
+async def startup_event():
+    logging.info("Бот запущен")
+    await app_telegram.initialize()
+    await app_telegram.start()
+    await app_telegram.updater.start_polling()
 
-# === FastAPI с lifespan ===
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("🚀 Бот запускается")
-    asyncio.create_task(app_telegram.run_polling())
-    yield
-    logger.info("🛑 Бот остановлен")
+# Завершение при остановке
+@app.on_event("shutdown")
+async def shutdown_event():
+    await app_telegram.updater.stop()
+    await app_telegram.stop()
+    await app_telegram.shutdown()
 
-app = FastAPI(lifespan=lifespan)
-
-
+# Корневой эндпоинт FastAPI
 @app.get("/")
-async def root():
-    return {"message": "Бот работает"}
+def root():
+    return {"status": "бот работает"}
+
+# Запуск uvicorn на Render
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("bot:app", host="0.0.0.0", port=10000)
