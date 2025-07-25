@@ -25,7 +25,7 @@ service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
 
 spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0")
-worksheet = spreadsheet.get_worksheet(0)
+worksheet = spreadsheet.worksheet("ЦС")
 
 # === Инициализация FastAPI и Telegram Application ===
 app = FastAPI()
