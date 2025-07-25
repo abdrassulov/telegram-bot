@@ -4,12 +4,9 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: uvicorn bot:app --host 0.0.0.0 --port 10000
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: GSPREAD_JSON
         sync: false
-      - key: RENDER_EXTERNAL_URL
-        sync: false
-    autoDeploy: true
