@@ -30,7 +30,7 @@ credentials = ServiceAccountCredentials.from_json_keyfile_dict(json_data, scope)
 gc = gspread.authorize(credentials)
 
 # Открываем таблицу
-spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/СПИСОК_ID_ИЛИ_URL")
+spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8")
 worksheet = spreadsheet.sheet1
 
 # Основная логика: поиск по номеру заказа
