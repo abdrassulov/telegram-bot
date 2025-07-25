@@ -1,68 +1,79 @@
 import os
 import json
 import logging
-import asyncio
 from fastapi import FastAPI
+import asyncio
 from telegram import Update
 from telegram.ext import (
     Application,
-    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters,
+    filters
 )
 import gspread
 from dotenv import load_dotenv
 
-# Загрузка переменных
+# Загрузка .env переменных
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GSPREAD_JSON = os.getenv("GSPREAD_JSON")
-
-# Логгирование
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Google Sheets
+# FastAPI app
+app = FastAPI()
+
+# Переменные окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GSPREAD_JSON = os.getenv("GSPREAD_JSON")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+
+# Авторизация в Google Sheets
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
 spreadsheet = gc.open_by_url(SPREADSHEET_URL)
 worksheet = spreadsheet.get_worksheet(0)
 
-# Поиск строки
-def find_row_by_order(order_number):
+# Функция поиска строки
+def find_order_row(order_number):
     headers = worksheet.row_values(1)
-    rows = worksheet.get_all_values()[1:]
-    for row in rows:
-        if row[0].strip() == order_number.strip():
-            return "\n".join(f"{headers[i]}: {cell}" for i, cell in enumerate(row))
+    all_data = worksheet.get_all_values()[1:]  # без заголовков
+    for row in all_data:
+        if len(row) > 0 and row[0].strip() == order_number.strip():
+            response_lines = []
+            for i, value in enumerate(row):
+                if i < len(headers):
+                    response_lines.append(f"{headers[i]}: {value}")
+            return "\n".join(response_lines)
     return "❌ Заказ не найден."
 
-# Telegram хендлеры
+# Обработчик /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Отправь номер заказа, и я найду его в таблице.")
+    await update.message.reply_text("Привет! Отправь мне номер заказа, и я найду данные.")
 
+# Обработчик текста
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    number = update.message.text.strip()
-    response = find_row_by_order(number)
+    order_number = update.message.text
+    response = find_order_row(order_number)
     await update.message.reply_text(response)
 
-# FastAPI
-app = FastAPI()
+# Создание Telegram приложения
+app_telegram = Application.builder().token(BOT_TOKEN).build()
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# Фоновый запуск Telegram-бота
+@app.on_event("startup")
+async def startup():
+    logging.info("✅ Бот запускается...")
+    asyncio.create_task(app_telegram.run_polling())
 
 @app.get("/")
 def root():
     return {"status": "бот работает"}
 
-# Глобальный объект Telegram Application
-telegram_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# Вместо @app.on_event — lifespan
-@app.on_event("startup")
-async def on_startup():
-    logging.info("✅ Запуск Telegram бота...")
-    asyncio.create_task(telegram_app.run_polling())
+# Для локального запуска
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("bot:app", host="0.0.0.0", port=10000)
