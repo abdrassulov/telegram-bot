@@ -1,76 +1,66 @@
 import os
-import json
 import logging
+import json
 import asyncio
 
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from fastapi import FastAPI
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-# Логирование
-logging.basicConfig(level=logging.INFO)
+# Загрузка переменных окружения
+load_dotenv()
 
-# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GSPREAD_JSON = os.getenv("GSPREAD_JSON")
 
-# FastAPI приложение
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Создание FastAPI приложения
 app = FastAPI()
 
-@app.get("/")
-def root():
-    return {"message": "Bot is alive"}
+# Подключение к Google Таблице
+gspread_json = os.getenv("GSPREAD_JSON")
+creds = json.loads(gspread_json)
+gc = gspread.service_account_from_dict(creds)
+spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8")
 
-# Авторизация Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(GSPREAD_JSON)
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-gc = gspread.authorize(creds)
+worksheet = spreadsheet.sheet1  # первая вкладка
 
-# Подключение к таблице
-spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0")
-worksheet = spreadsheet.get_worksheet(0)
+# Telegram-приложение
+app_telegram = Application.builder().token(BOT_TOKEN).build()
 
-# Команда /start
+# Обработчик команд
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отправь номер заказа")
+    await update.message.reply_text("Введите номер заказа:")
 
-# Обработка номера заказа
+# Обработчик сообщений (поиск в таблице)
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
     order_number = update.message.text.strip()
-    logging.info(f"Ищем заказ: {order_number}")
-
     try:
-        data = worksheet.get_all_records()
-        headers = worksheet.row_values(1)
+        records = worksheet.get_all_records()
+        result = None
+        for row in records:
+            if str(row.get("Номер заказа")) == order_number:
+                result = "\n".join([f"{k} — {v}" for k, v in row.items()])
+                break
 
-        for row in data:
-            if str(row.get("Номер заказа")).strip() == order_number:
-                response = "\n".join(f"{header}: {row.get(header, '')}" for header in headers)
-                await update.message.reply_text(response)
-                return
-
-        await update.message.reply_text("Номер заказа не найден.")
+        if result:
+            await update.message.reply_text(result)
+        else:
+            await update.message.reply_text("Заказ не найден.")
     except Exception as e:
-        logging.exception("Ошибка при поиске")
-        await update.message.reply_text(f"Ошибка: {e}")
+        logger.exception("Ошибка при обработке заказа")
+        await update.message.reply_text("Произошла ошибка при обработке.")
 
-# Основной бот
-async def run_bot():
-    application = Application.builder().token(BOT_TOKEN).build()
+# Регистрация хендлеров
+app_telegram.add_handler(CommandHandler("start", start))
+app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logging.info("Telegram bot is running")
-    await application.run_polling(close_loop=False)
-
-# Запуск бота при старте FastAPI
+# Старт телеграм-бота при запуске сервера
 @app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(run_bot())
+async def on_startup():
+    logger.info("Бот запущен")
+    asyncio.create_task(app_telegram.run_polling())
