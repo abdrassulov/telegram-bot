@@ -1,30 +1,34 @@
 import os
 import logging
+import json
+import gspread
 from fastapi import FastAPI
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-import gspread
-import json
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+)
 from dotenv import load_dotenv
 
 # Загрузка переменных окружения
 load_dotenv()
 
-# Инициализация логгера
+# Логгирование
 logging.basicConfig(level=logging.INFO)
 
-# Создание FastAPI-приложения
+# FastAPI-приложение
 app = FastAPI()
 
-# Создание Telegram-бота
+# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSPREAD_JSON = os.getenv("GSPREAD_JSON")
 
-# Авторизация в Google Sheets
+# Google Sheets
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
-
-# Укажи ПРАВИЛЬНЫЙ URL твоей таблицы
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
 spreadsheet = gc.open_by_url(SPREADSHEET_URL)
 worksheet = spreadsheet.get_worksheet(0)
@@ -37,14 +41,19 @@ def find_row_by_order(order_number):
             return "\n".join([f"{k}: {v}" for k, v in row.items()])
     return "Заказ не найден."
 
-# Обработчик сообщений Telegram
+# Обработчик команды /start
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привет! Отправь номер заказа.")
+
+# Обработчик текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_number = update.message.text
     response = find_row_by_order(order_number)
     await update.message.reply_text(response)
 
-# Инициализация Telegram-приложения
+# Инициализация Telegram-бота
 app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
+app_telegram.add_handler(CommandHandler("start", start_command))
 app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 # Запуск Telegram-бота при старте FastAPI
@@ -55,19 +64,19 @@ async def startup_event():
     await app_telegram.start()
     await app_telegram.updater.start_polling()
 
-# Завершение при остановке
+# Завершение работы бота
 @app.on_event("shutdown")
 async def shutdown_event():
     await app_telegram.updater.stop()
     await app_telegram.stop()
     await app_telegram.shutdown()
 
-# Корневой эндпоинт FastAPI
+# FastAPI root
 @app.get("/")
 def root():
     return {"status": "бот работает"}
 
-# Запуск uvicorn на Render
+# Для локального запуска (например, через uvicorn)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("bot:app", host="0.0.0.0", port=10000)
