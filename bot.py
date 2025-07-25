@@ -5,15 +5,16 @@ from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import (
     Application,
-    ContextTypes,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
+    ContextTypes,
     filters
 )
 import gspread
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
-# Загрузка переменных окружения
+# Загрузка .env
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSPREAD_JSON = os.getenv("GSPREAD_JSON")
@@ -25,64 +26,50 @@ logging.basicConfig(level=logging.INFO)
 # Подключение к Google Sheets
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
-
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8"
 spreadsheet = gc.open_by_url(SPREADSHEET_URL)
 worksheet = spreadsheet.get_worksheet(0)
 
-# FastAPI app
-app = FastAPI()
+# Telegram приложение
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-# Создание Telegram-приложения
-app_telegram = Application.builder().token(BOT_TOKEN).build()
-
-
+# Функция поиска по заказу
 def find_row_by_order(order_number: str) -> str:
     all_data = worksheet.get_all_values()
     headers = all_data[0]
     for row in all_data[1:]:
-        if row[0].strip() == order_number.strip():  # поиск по первому столбцу
-            result = "\n".join([f"{headers[i]} — {row[i]}" for i in range(len(headers))])
-            return result
+        if row[0].strip() == order_number.strip():
+            return "\n".join([f"{headers[i]} — {row[i]}" for i in range(len(headers))])
     return "❌ Заказ не найден."
 
-
-# Обработчик команды /start
+# Обработчики
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь номер заказа, и я пришлю детали.")
+    await update.message.reply_text("Привет! Отправь номер заказа, и я покажу данные.")
 
-# Обработчик номера заказа
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    order_number = update.message.text.strip()
-    response = find_row_by_order(order_number)
-    await update.message.reply_text(response)
+async def handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    order = update.message.text.strip()
+    await update.message.reply_text(find_row_by_order(order))
 
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_order))
 
-# Регистрация обработчиков
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+# Lifespan для FastAPI
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.info("✅ Запуск Telegram-бота")
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(url=RENDER_EXTERNAL_URL)
+    yield
+    logging.info("🛑 Остановка Telegram-бота")
+    await telegram_app.shutdown()
 
+# FastAPI
+app = FastAPI(lifespan=lifespan)
 
-# Webhook endpoint от Telegram
+# Webhook endpoint
 @app.post("/")
-async def telegram_webhook(req: Request):
+async def webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, app_telegram.bot)
-    await app_telegram.process_update(update)
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
     return {"ok": True}
-
-
-# При старте — устанавливаем webhook
-@app.on_event("startup")
-async def on_startup():
-    logging.info("✅ Бот запускается...")
-    await app_telegram.initialize()
-    await app_telegram.bot.set_webhook(f"{RENDER_EXTERNAL_URL}")
-    logging.info("✅ Webhook установлен")
-
-
-# При завершении
-@app.on_event("shutdown")
-async def on_shutdown():
-    await app_telegram.bot.delete_webhook()
-    await app_telegram.shutdown()
