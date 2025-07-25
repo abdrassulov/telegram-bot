@@ -2,77 +2,74 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
-    ApplicationBuilder,
     Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters,
+    filters
 )
 import gspread
 from dotenv import load_dotenv
-from contextlib import asynccontextmanager
 
-# Загрузка переменных
+# Загрузка переменных окружения
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSPREAD_JSON = os.getenv("GSPREAD_JSON")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-# Логгер
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Google Sheets auth
+# Инициализация Google Sheets
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
 spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0")
 worksheet = spreadsheet.get_worksheet(0)
 
-# Поиск по номеру заказа
-def find_row(order_number):
-    headers = worksheet.row_values(1)
-    all_data = worksheet.get_all_values()[1:]  # skip header
-    for row in all_data:
-        if row[0].strip() == order_number.strip():
-            return "\n".join([f"{headers[i]}: {row[i]}" for i in range(len(headers))])
-    return "\u274c \u0417аказ не найден."
-
 # Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("\ud83d\udc4b Привет! Отправь номер заказа, и я найду информацию.")
+    await update.message.reply_text("Привет! Отправь номер заказа, и я пришлю детали.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    result = find_row(text)
-    await update.message.reply_text(result)
+    order_number = update.message.text.strip()
+    headers = worksheet.row_values(1)
+    all_rows = worksheet.get_all_values()
 
-# Сборка Telegram App
-bot: Application = ApplicationBuilder().token(BOT_TOKEN).build()
-bot.add_handler(CommandHandler("start", start))
-bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    for row in all_rows[1:]:
+        if row[0].strip() == order_number:
+            response = "\n".join([f"{headers[i]}: {row[i]}" for i in range(min(len(headers), len(row)))])
+            await update.message.reply_text(response)
+            return
+    await update.message.reply_text("❌ Заказ не найден.")
 
-# FastAPI с lifespan
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logging.info("\u2705 Бот запущен...")
-    await bot.initialize()
-    await bot.start()
-    await bot.set_webhook(f"{RENDER_EXTERNAL_URL}/webhook")
-    yield
-    await bot.stop()
-    await bot.shutdown()
+# FastAPI приложение
+app = FastAPI()
+bot_app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+bot_app.add_handler(CommandHandler("start", start))
+bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-app = FastAPI(lifespan=lifespan)
+@app.on_event("startup")
+async def on_startup():
+    logging.info("✅ Запуск бота")
+    await bot_app.initialize()
+    await bot_app.bot.delete_webhook()
+    await bot_app.bot.set_webhook(f"{RENDER_EXTERNAL_URL}/webhook")
+    logging.info("📡 Webhook установлен")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot_app.shutdown()
 
 @app.post("/webhook")
-async def webhook(request: Request):
+async def telegram_webhook(request: Request):
     data = await request.json()
-    update = Update.de_json(data, bot.bot)
-    await bot.process_update(update)
+    update = Update.de_json(data, bot_app.bot)
+    await bot_app.process_update(update)
     return {"ok": True}
 
 @app.get("/")
 def root():
-    return {"status": "bot is live"}
+    return {"status": "бот работает"}
