@@ -62,6 +62,9 @@ async def startup_event():
     logging.info("Бот запущен")
     await app_telegram.initialize()
     await app_telegram.start()
+
+    await app_telegram.bot.delete_webhook(drop_pending_updates=True)
+
     await app_telegram.updater.start_polling()
 
 # Завершение работы бота
