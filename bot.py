@@ -31,7 +31,7 @@ service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
 
 # URL таблицы
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8"
 spreadsheet = gc.open_by_url(SPREADSHEET_URL)
 worksheet = spreadsheet.get_worksheet(0)
 
@@ -58,18 +58,19 @@ app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
 app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Запуск бота при старте приложения
+# Запуск бота при старте FastAPI
 @app.on_event("startup")
 async def startup():
-    logging.info("Бот запущен")
+    logging.info("✅ Бот запускается...")
     await app_telegram.initialize()
     await app_telegram.start()
-    await app_telegram.updater.start_polling()
+    await app_telegram.start_polling()
+    logging.info("🤖 Бот запущен и слушает polling.")
 
 # Остановка бота при выключении
 @app.on_event("shutdown")
 async def shutdown():
-    await app_telegram.updater.stop()
+    logging.info("🛑 Остановка бота...")
     await app_telegram.stop()
     await app_telegram.shutdown()
 
@@ -78,7 +79,7 @@ async def shutdown():
 def root():
     return {"status": "бот работает"}
 
-# Локальный запуск (на Render не используется, но оставим)
+# Локальный запуск (не нужен на Render)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("bot:app", host="0.0.0.0", port=10000)
