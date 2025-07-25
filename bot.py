@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from fastapi import FastAPI
 from telegram import Update
 from telegram.ext import (
@@ -53,7 +54,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = find_row_by_order(order_number)
     await update.message.reply_text(response)
 
-# Инициализация Telegram Application
+# Создание Telegram Application
 app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
 app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -61,11 +62,11 @@ app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 # Запуск бота при старте FastAPI
 @app.on_event("startup")
 async def startup():
-    logging.info("✅ Бот запускается...")
+    logging.info("✅ Запуск бота...")
     await app_telegram.initialize()
     await app_telegram.start()
-    await app_telegram.start_polling()
-    logging.info("🤖 Бот запущен и слушает polling.")
+    asyncio.create_task(app_telegram.run_polling())
+    logging.info("🤖 Бот работает через polling")
 
 # Остановка бота при выключении
 @app.on_event("shutdown")
@@ -79,7 +80,7 @@ async def shutdown():
 def root():
     return {"status": "бот работает"}
 
-# Локальный запуск (не нужен на Render)
+# Локальный запуск
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("bot:app", host="0.0.0.0", port=10000)
