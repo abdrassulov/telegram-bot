@@ -2,95 +2,86 @@ import os
 import json
 import logging
 from fastapi import FastAPI, Request
-import uvicorn
+from fastapi.responses import JSONResponse
 from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, MessageHandler,
-    CommandHandler, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
-import gspread
 from dotenv import load_dotenv
+import gspread
 
-# Загрузка переменных окружения
+# Загрузка .env
 load_dotenv()
+
+# Настройка логгирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GSPREAD_JSON = os.getenv("GSPREAD_JSON")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # https://your-service.onrender.com
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 # Подключение к Google Sheets
 service_account_info = json.loads(GSPREAD_JSON)
 gc = gspread.service_account_from_dict(service_account_info)
-
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8/edit#gid=0"
-spreadsheet = gc.open_by_url(SPREADSHEET_URL)
-worksheet = spreadsheet.get_worksheet(0)
+worksheet = gc.open_by_url(SPREADSHEET_URL).get_worksheet(0)
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+# Инициализация Telegram-приложения
+app_tg = Application.builder().token(BOT_TOKEN).build()
 
-# FastAPI
-app = FastAPI()
-
-# Telegram Application
-app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
-
-
-# Поиск строки по номеру заказа
-def find_row_by_order(order_number):
-    data = worksheet.get_all_values()
-    headers = data[0]
-    for row in data[1:]:
-        if row[0].strip() == str(order_number).strip():
-            result = []
-            for i in range(len(headers)):
-                if i < len(row):
-                    result.append(f"{headers[i]}: {row[i]}")
-            return "\n".join(result)
+# Функция поиска строки
+def find_order(order_number: str) -> str:
+    headers = worksheet.row_values(1)
+    all_data = worksheet.get_all_values()[1:]
+    for row in all_data:
+        if row and row[0].strip() == order_number.strip():
+            return "\n".join([f"{headers[i]} — {row[i]}" for i in range(len(headers)) if i < len(row)])
     return "Заказ не найден."
 
-
-# Обработка команды /start
+# Обработчик /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь номер заказа, и я найду информацию.")
+    await update.message.reply_text("Привет! Отправь номер заказа, и я покажу информацию.")
 
-
-# Обработка номера заказа
+# Обработчик номера заказа
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    order_number = update.message.text
-    response = find_row_by_order(order_number)
+    text = update.message.text.strip()
+    response = find_order(text)
     await update.message.reply_text(response)
 
-
 # Регистрация обработчиков
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app_tg.add_handler(CommandHandler("start", start))
+app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-
-@app.on_event("startup")
-async def on_startup():
-    logging.info("🚀 Запуск бота")
-    await app_telegram.initialize()
-    await app_telegram.bot.delete_webhook(drop_pending_updates=True)
-    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
-    await app_telegram.bot.set_webhook(url=webhook_url)
-    logging.info(f"Webhook установлен: {webhook_url}")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    logging.info("🛑 Остановка бота")
-    await app_telegram.bot.delete_webhook()
-    await app_telegram.shutdown()
-
+# FastAPI-приложение
+app = FastAPI()
 
 @app.post("/webhook")
 async def telegram_webhook(req: Request):
-    body = await req.body()
-    update = Update.de_json(json.loads(body), app_telegram.bot)
-    await app_telegram.process_update(update)
-    return {"ok": True}
-
+    data = await req.json()
+    update = Update.de_json(data, app_tg.bot)
+    await app_tg.process_update(update)
+    return JSONResponse({"status": "ok"})
 
 @app.get("/")
-def root():
-    return {"status": "бот работает"}
+def home():
+    return {"status": "ok"}
+
+# Lifespan (запуск бота + установка webhook)
+@app.on_event("startup")
+async def on_startup():
+    logger.info("⏳ Установка Webhook...")
+    await app_tg.initialize()
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    await app_tg.bot.set_webhook(webhook_url)
+    logger.info(f"✅ Webhook установлен: {webhook_url}")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logger.info("🛑 Отключение Webhook...")
+    await app_tg.shutdown()
