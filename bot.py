@@ -1,62 +1,69 @@
 import os
 import json
-import logging
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import logging
+from fastapi import FastAPI
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import Application, CommandHandler, ContextTypes
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Настройка логов
+# Инициализация FastAPI (для Render)
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"status": "Bot is running"}
+
+# Логгинг
 logging.basicConfig(level=logging.INFO)
 
-# Авторизация Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-json_data = os.environ.get("GSPREAD_JSON")
-creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(json_data), scope)
-client = gspread.authorize(creds)
+# Получаем переменные окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GSPREAD_JSON = os.getenv("GSPREAD_JSON")
+
+# Парсим JSON ключ
+json_data = json.loads(GSPREAD_JSON)
+
+# Авторизация в Google Sheets
+scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(json_data, scope)
+gc = gspread.authorize(credentials)
 
 # Открываем таблицу
-spreadsheet = client.open_by_key("1Pjw1XZgeTGplzm5eJxKkExA4q5YvJjTD4wdptbn7tY8")
-worksheet = spreadsheet.worksheet("СЦ")
+spreadsheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/СПИСОК_ID_ИЛИ_URL")
+worksheet = spreadsheet.sheet1
 
-# /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь номер заказа, чтобы получить всю информацию.")
+# Основная логика: поиск по номеру заказа
+async def handle_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text.strip()
+    try:
+        data = worksheet.get_all_values()
+        headers = data[0]
+        for row in data[1:]:
+            if row[0] == query:
+                response = "\n".join(
+                    f"{headers[i]}: {row[i]}" for i in range(min(len(headers), len(row)))
+                )
+                await update.message.reply_text(f"Вот информация о заказе:\n\n{response}")
+                return
+        await update.message.reply_text("Заказ не найден.")
+    except Exception as e:
+        await update.message.reply_text("Ошибка при обработке запроса.")
+        logging.exception("Ошибка:")
 
-# Сообщения
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text.strip()
+# Запуск бота
+async def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", handle_order))
+    application.add_handler(CommandHandler("help", handle_order))
+    application.add_handler(CommandHandler("order", handle_order))
+    application.add_handler(CommandHandler("заказ", handle_order))
+    application.add_handler(CommandHandler("номер", handle_order))
+    application.add_handler(CommandHandler("номер_заказа", handle_order))
+    application.add_handler(CommandHandler("номерзаказа", handle_order))
 
-    # Все данные
-    all_data = worksheet.get_all_values()
-    headers = all_data[0]  # первая строка = шапка
-    rows = all_data[1:]    # остальные строки = данные
+    application.add_handler(CommandHandler(None, handle_order))
+    await application.run_polling()
 
-    # Поиск строки
-    result = None
-    for row in rows:
-        if row[0].strip() == user_input:
-            result = row
-            break
-
-    # Формируем ответ
-    if result:
-        lines = []
-        for i in range(len(headers)):
-            key = headers[i].strip()
-            value = result[i].strip() if i < len(result) else ""
-            lines.append(f"{key}: {value}")
-        message = "Вот информация о заказе:\n" + "\n".join(lines)
-    else:
-        message = "Ничего не найдено по этому номеру заказа."
-
-    await update.message.reply_text(message)
-
-# Запуск
-if __name__ == "__main__":
-    BOT_TOKEN = os.environ.get("BOT_TOKEN")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("Бот запущен ...")
-    app.run_polling()
+import asyncio
+asyncio.create_task(main())
